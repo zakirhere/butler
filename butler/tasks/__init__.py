@@ -1,1 +1,1 @@
-from butler.tasks import ping  # noqa: F401  (import registers the task)
+from butler.tasks import ping, slack_test  # noqa: F401  (import registers the tasks)

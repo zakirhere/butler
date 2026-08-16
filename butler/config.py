@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     token: str
     port: int = 8787
     host: str | None = None
+    slack_bot_token: str | None = None
+    slack_webhook_url: str | None = None
+    slack_channel_id: str | None = None
 
     def resolved_host(self) -> str:
         if self.host:
