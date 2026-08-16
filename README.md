@@ -55,6 +55,36 @@ curl -X POST http://<tailscale-ip>:8787/tasks/ping \
 curl http://<tailscale-ip>:8787/tasks -H "Authorization: Bearer <your BUTLER_TOKEN>"
 ```
 
+## Slack notifications
+
+`butler/slack.py` exposes `notify(text, channel=None)` for posting messages
+from any task. It prefers a bot token (`chat.postMessage`, can target any
+channel by ID) and falls back to an incoming webhook if only that's set.
+
+Config (in `.env`, see `.env.example`):
+
+- `BUTLER_SLACK_BOT_TOKEN` — `xoxb-...`, needs the `chat:write` scope
+  (add `chat:write.public` too if you don't want to manually invite the
+  bot to public channels)
+- `BUTLER_SLACK_CHANNEL_ID` — default channel `notify()` posts to
+- `BUTLER_SLACK_WEBHOOK_URL` — fallback if no bot token is set (bound to
+  whichever channel the webhook was created for)
+
+Verify it's wired up with the built-in test task:
+
+```bash
+curl -X POST http://<tailscale-ip>:8787/tasks/slack_test \
+  -H "Authorization: Bearer <your BUTLER_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"payload": {}}'
+```
+
+This is a deliberately scaled-down copy of the pattern in
+`~/personal/trading-bot/tradebot/notify.py` (bot-token-first, webhook
+fallback) — not an import of that package. trading-bot is a separate
+live-money repo with its own strict guardrails and shouldn't be a
+dependency of an unrelated project.
+
 ## Adding a new task
 
 Create a file in `butler/tasks/`, register it with the `@task(...)`
