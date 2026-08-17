@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.zakbot.butler-marketplace</string>
+    <key>WorkingDirectory</key>
+    <string>/Users/zakir/zakbot/butler</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/zakir/zakbot/butler/.venv/bin/python</string>
+        <string>-m</string>
+        <string>butler.marketplace_worker</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/zakir/zakbot/butler/logs/marketplace.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/zakir/zakbot/butler/logs/marketplace.err.log</string>
+</dict>
+</plist>

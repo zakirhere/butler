@@ -1,6 +1,7 @@
 import subprocess
 import sys
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -41,6 +42,17 @@ class Settings(BaseSettings):
     slack_bot_token: str | None = None
     slack_webhook_url: str | None = None
     slack_channel_id: str | None = None
+    marketplace_enabled: bool = False
+    marketplace_state_path: str = "data/marketplace-seen.json"
+    marketplace_browser_profile: str = "data/facebook-profile"
+    marketplace_llm_provider: str = "openai"
+    marketplace_llm_model: str = "gpt-5.6-luna"
+    marketplace_locations: str = "sanfrancisco,losangeles,portland,lasvegas,saltlakecity"
+    marketplace_query: str = "2026 tesla model y"
+    marketplace_min_price: int = 35000
+    marketplace_max_price: int = 41000
+    marketplace_max_detail_pages: int = 12
+    openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
 
     def resolved_host(self) -> str:
         if self.host:
