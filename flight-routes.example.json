@@ -1,0 +1,16 @@
+[
+  {
+    "label": "Example: SFO to Tokyo (fixed date)",
+    "origin": "SFO",
+    "destination": "TYO",
+    "date": "2026-12-11",
+    "max_price": 900
+  },
+  {
+    "label": "Example: Mumbai to Cairo (flexible +/- a few days)",
+    "origin": "BOM",
+    "destination": "CAI",
+    "date_start": "2027-01-03",
+    "date_end": "2027-01-07"
+  }
+]

@@ -135,3 +135,24 @@ Check it's running: `launchctl list | grep butler`, or tail
 
 The plist assumes the venv lives at `.venv` inside this repo — update the
 `ProgramArguments` path if yours is elsewhere.
+
+## Scheduled tasks (Marketplace, flight watching)
+
+Some tasks run on a schedule instead of waiting for a phone request —
+`launchd/com.zakbot.butler-marketplace.plist` and
+`launchd/com.zakbot.butler-flights.plist`. Each just invokes the
+corresponding `butler.*_worker` module directly (not through the HTTP
+server), so they work even if the main server isn't running:
+
+```bash
+cp launchd/com.zakbot.butler-marketplace.plist ~/Library/LaunchAgents/
+cp launchd/com.zakbot.butler-flights.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.zakbot.butler-marketplace.plist
+launchctl load ~/Library/LaunchAgents/com.zakbot.butler-flights.plist
+```
+
+Each feature also has its own `*_enabled` flag in `.env` (e.g.
+`BUTLER_FLIGHT_ENABLED`) — it's a no-op until you flip that on, even if the
+launchd job is loaded. Do one manual run via the matching `POST /tasks/...`
+endpoint before trusting the cron. See `NOTES.md` for what each feature
+does and what setup (credentials, one-time logins) it still needs.
