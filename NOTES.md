@@ -153,6 +153,11 @@ on the Duffel dashboard before changing this schedule upward.
 - Duffel account (https://duffel.com) + a **live** API key — test keys
   won't work for this, see above. Live access needs a payment method on
   file.
+  - **Status as of 2026-08-17**: account created, "Go live" submitted,
+    business details under review ("usually less than 2 business days"
+    per Duffel's own banner). No live key exists yet — don't try to
+    enable `BUTLER_FLIGHT_ENABLED` until this clears, a test-mode key
+    will just silently return fake fares.
 - `BUTLER_DUFFEL_API_KEY=duffel_live_...` and `BUTLER_FLIGHT_ENABLED=true`
   in `.env`, plus the Slack bot token/channel already required by the
   Marketplace feature (reused here unless `BUTLER_FLIGHT_SLACK_CHANNEL_ID`
