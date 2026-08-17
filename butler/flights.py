@@ -1,9 +1,14 @@
-"""Flight price watching via the Amadeus Self-Service Flight Offers Search API.
+"""Flight price watching via the Duffel API.
 
 Watches a list of one-way legs (see data/flight-routes.json, or
 flight-routes.example.json for the format) rather than a single
 origin/destination pair, since a multi-city itinerary is a set of
 independent one-way searches, not one round trip.
+
+Requires a *live* Duffel API key (duffel_live_...) — a test-mode key only
+returns simulated fares from Duffel's fake "Duffel Airways", which is
+useless for tracking real prices. See NOTES.md for the tradeoff (a live
+key needs a payment method on file with Duffel).
 """
 
 from __future__ import annotations
@@ -21,6 +26,8 @@ from butler.config import settings
 from butler.slack import notify
 
 log = logging.getLogger(__name__)
+
+DUFFEL_VERSION = "v2"
 
 
 @dataclass
@@ -67,21 +74,15 @@ class FlightOffer:
     booking_url: str
 
 
-def _get_access_token() -> str:
-    if not settings.amadeus_client_id or not settings.amadeus_client_secret:
-        raise RuntimeError("Amadeus client id/secret are required for flight watching")
-    response = httpx.post(
-        f"{settings.amadeus_api_base}/v1/security/oauth2/token",
-        data={
-            "grant_type": "client_credentials",
-            "client_id": settings.amadeus_client_id,
-            "client_secret": settings.amadeus_client_secret,
-        },
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        timeout=15,
-    )
-    response.raise_for_status()
-    return response.json()["access_token"]
+def _headers() -> dict[str, str]:
+    if not settings.duffel_api_key:
+        raise RuntimeError("Duffel API key is required for flight watching")
+    return {
+        "Authorization": f"Bearer {settings.duffel_api_key}",
+        "Duffel-Version": DUFFEL_VERSION,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
 
 
 def _load_routes() -> list[Route]:
@@ -133,33 +134,34 @@ def _booking_url(route: Route, date: str) -> str:
     )
 
 
-def _search_offers(token: str, route: Route, date: str) -> list[FlightOffer]:
-    params = {
-        "originLocationCode": route.origin,
-        "destinationLocationCode": route.destination,
-        "departureDate": date,
-        "adults": settings.flight_adults,
-        "currencyCode": settings.flight_currency,
-        "max": 20,
+def _search_offers(route: Route, date: str) -> list[FlightOffer]:
+    body = {
+        "data": {
+            "slices": [{"origin": route.origin, "destination": route.destination, "departure_date": date}],
+            "passengers": [{"type": "adult"} for _ in range(settings.flight_adults)],
+            "cabin_class": "economy",
+        }
     }
-    response = httpx.get(
-        f"{settings.amadeus_api_base}/v2/shopping/flight-offers",
-        params=params,
-        headers={"Authorization": f"Bearer {token}"},
+    response = httpx.post(
+        f"{settings.duffel_api_base}/air/offer_requests",
+        json=body,
+        headers=_headers(),
         timeout=30,
     )
     response.raise_for_status()
+    raw_offers = response.json()["data"].get("offers", [])
     offers = []
-    for item in response.json().get("data", []):
-        itinerary = item["itineraries"][0]
-        segments = itinerary["segments"]
+    for item in raw_offers:
+        slice0 = item["slices"][0]
+        segments = slice0["segments"]
+        owner = item.get("owner") or {}
         offers.append(
             FlightOffer(
-                price=float(item["price"]["total"]),
-                currency=item["price"]["currency"],
-                airline=segments[0]["carrierCode"],
+                price=float(item["total_amount"]),
+                currency=item["total_currency"],
+                airline=owner.get("iata_code") or owner.get("name") or "?",
                 stops=len(segments) - 1,
-                duration=itinerary["duration"],
+                duration=slice0.get("duration", ""),
                 date=date,
                 booking_url=_booking_url(route, date),
             )
@@ -167,11 +169,11 @@ def _search_offers(token: str, route: Route, date: str) -> list[FlightOffer]:
     return sorted(offers, key=lambda offer: offer.price)
 
 
-def _best_offer_across_dates(token: str, route: Route) -> FlightOffer | None:
+def _best_offer_across_dates(route: Route) -> FlightOffer | None:
     best: FlightOffer | None = None
     for date in route.candidate_dates:
         try:
-            offers = _search_offers(token, route, date)
+            offers = _search_offers(route, date)
         except Exception:
             log.exception("flight search failed for %s on %s", route.display, date)
             continue
@@ -180,8 +182,8 @@ def _best_offer_across_dates(token: str, route: Route) -> FlightOffer | None:
     return best
 
 
-def _check_route(token: str, route: Route, best_prices: dict[str, float]) -> bool:
-    best = _best_offer_across_dates(token, route)
+def _check_route(route: Route, best_prices: dict[str, float]) -> bool:
+    best = _best_offer_across_dates(route)
     if best is None:
         return False
 
@@ -215,13 +217,12 @@ def scan_and_notify() -> dict:
         raise RuntimeError("Flight watching requires a Slack bot token")
 
     routes = _load_routes()
-    token = _get_access_token()
     best_prices = _load_best_prices()
 
     notified = 0
     for route in routes:
         try:
-            if _check_route(token, route, best_prices):
+            if _check_route(route, best_prices):
                 notified += 1
         except Exception:
             log.exception("flight check failed for %s", route.display)

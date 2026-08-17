@@ -70,9 +70,37 @@ Watch a multi-city, one-way itinerary and alert on Slack when the price for
 any leg drops to a new low (or under a max, if set). No booking/purchase —
 same "notify only, human clicks buy" boundary as the Marketplace watcher,
 deliberately: a flight purchase is an irreversible financial transaction,
-and both Amadeus's and Kiwi's booking endpoints are gated behind
-travel-agency/business partnership approval anyway, not something a
-personal script can casually wire up.
+and flight-booking APIs are generally gated behind travel-agency/business
+approval anyway, not something a personal script can casually wire up.
+
+### API provider — history, don't re-litigate this
+
+Went through three options before landing on Duffel:
+
+1. **Amadeus for Developers Self-Service** — originally chosen (free,
+   no-card signup). As of 2026-07-17 the self-service portal is
+   decommissioned; developers.amadeus.com is now "Enterprise API Portal"
+   only, sales-gated ("Request access... get support from one of our
+   experienced travel consultants"). Dead for hobbyist use, don't retry.
+2. **Kiwi.com Tequila** — considered as a fallback early on. Turns out
+   it's been closed to new signups since **2024-05-30**
+   (partners.kiwi.com redirects to a blog post: "Any new partnerships on
+   the Tequila platform will be on an invitation only basis"). Was never
+   actually viable in this window — don't retry.
+3. **Duffel** — what's implemented. Genuinely self-serve (~1 min signup,
+   no sales call), real-time GDS/NDC pricing, docs at docs.duffel.com.
+   **Important**: needs a *live* API key (`duffel_live_...`), not test
+   mode — test-mode keys only return simulated fares from a fake airline
+   ("Duffel Airways"), useless for real price tracking. A live key
+   requires a payment method on file with Duffel (their search fee is
+   ~$0.005/search past a free allowance — trivial for our volume, but a
+   real card is on file, unlike the old Amadeus free tier). User chose to
+   go live on Duffel with this tradeoff accepted (2026-08-17).
+
+If Duffel also becomes unavailable someday, FlightAPI.io was the next
+candidate researched (purpose-built for price-tracking only, no booking
+capability, 20 free calls then $49/mo) — verify it's still viable before
+switching, this space seems to be consolidating away from free tiers.
 
 ### The itinerary (as of 2026-08-17)
 
@@ -96,36 +124,39 @@ from ±2, adjust `date_start`/`date_end` in `data/flight-routes.json`.
 
 ### How it works
 
-`butler/flights.py`: OAuth2 client-credentials against Amadeus
-(`amadeus_client_id`/`secret` in config), then Flight Offers Search
-(`/v2/shopping/flight-offers`) per candidate date. For a flexible leg this
-means one API call per date in the window (5 calls for a ±2-day window),
-not a single ranged query — Amadeus does have a dedicated Flight Cheapest
-Date Search API for this, but wiring up a second endpoint with a different
-response schema wasn't worth it for a 4-leg itinerary. Revisit if the
-number of flexible legs grows.
+`butler/flights.py`: single Bearer key against Duffel (`duffel_api_key` in
+config, no OAuth exchange needed — simpler than Amadeus was). Per candidate
+date: `POST /air/offer_requests` with `return_offers` defaulting to true,
+so the offers array comes back synchronously in the same response — no
+second call. For a flexible leg this means one request per date in the
+window (5 requests for a ±2-day window), not a single ranged query; Duffel
+doesn't have a cheapest-date-range endpoint like Amadeus did, so this is
+the only option, not a shortcut taken for convenience.
 
 Dedup/new-low tracking is per-route (`route.key`, not per-date) in
 `data/flight-seen.json` — a flexible leg only re-notifies if its best price
 across the whole window drops below the last notified price, not on every
 date searched.
 
-### Quota note
+### Quota / cost note
 
-~12 Amadeus calls per full scan (2 fixed legs + 2 flexible legs × 5 dates
+~12 Duffel requests per full scan (2 fixed legs + 2 flexible legs × 5 dates
 each). `launchd/com.zakbot.butler-flights.plist` runs this twice a day
-(06:00 and 18:00), not hourly like Marketplace — deliberately, since the
-free/test-tier Amadeus quota is limited and a 4-months-out trip doesn't
-need hourly granularity anyway. Verify current quota limits on the
-Amadeus account before changing this schedule.
+(06:00 and 18:00), not hourly like Marketplace — a 4-months-out trip
+doesn't need hourly granularity, and it keeps the (small) per-search cost
+down. ~24 requests/day ≈ 720/month; at Duffel's ~$0.005/search-past-free-
+allowance this is a few dollars/month worst case. Verify current pricing
+on the Duffel dashboard before changing this schedule upward.
 
 ### Setup still needed (nothing in code does this)
 
-- Amadeus account + app (https://developers.amadeus.com) for
-  `BUTLER_AMADEUS_CLIENT_ID`/`BUTLER_AMADEUS_CLIENT_SECRET`
-- `BUTLER_FLIGHT_ENABLED=true` in `.env`, plus the Slack bot token/channel
-  already required by the Marketplace feature (reused here unless
-  `BUTLER_FLIGHT_SLACK_CHANNEL_ID` overrides it)
+- Duffel account (https://duffel.com) + a **live** API key — test keys
+  won't work for this, see above. Live access needs a payment method on
+  file.
+- `BUTLER_DUFFEL_API_KEY=duffel_live_...` and `BUTLER_FLIGHT_ENABLED=true`
+  in `.env`, plus the Slack bot token/channel already required by the
+  Marketplace feature (reused here unless `BUTLER_FLIGHT_SLACK_CHANNEL_ID`
+  overrides it)
 - `launchctl load` the flights plist once the above is set
 - One manual dry run via `POST /tasks/flight_watch` before trusting the
   cron, same as recommended for Marketplace

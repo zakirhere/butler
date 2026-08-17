@@ -53,14 +53,12 @@ class Settings(BaseSettings):
     marketplace_max_price: int = 41000
     marketplace_max_detail_pages: int = 12
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
-    amadeus_api_base: str = "https://test.api.amadeus.com"
-    amadeus_client_id: str | None = None
-    amadeus_client_secret: str | None = None
+    duffel_api_base: str = "https://api.duffel.com"
+    duffel_api_key: str | None = None
     flight_enabled: bool = False
     flight_routes_path: str = "data/flight-routes.json"
     flight_state_path: str = "data/flight-seen.json"
     flight_adults: int = 1
-    flight_currency: str = "USD"
     flight_slack_channel_id: str | None = None
 
     def resolved_host(self) -> str:
