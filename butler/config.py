@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     marketplace_locations: str = "sanfrancisco,losangeles,portland,lasvegas,saltlakecity"
     marketplace_query: str = "2026 tesla model y"
     marketplace_min_price: int = 35000
-    marketplace_max_price: int = 41000
+    marketplace_max_price: int = 42000
     marketplace_max_detail_pages: int = 12
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     duffel_api_base: str = "https://api.duffel.com"
@@ -60,6 +60,15 @@ class Settings(BaseSettings):
     flight_state_path: str = "data/flight-seen.json"
     flight_adults: int = 1
     flight_slack_channel_id: str | None = None
+    smartfind_enabled: bool = False
+    smartfind_auto_accept: bool = False
+    smartfind_poll_seconds: int = 1800
+    smartfind_accept_retry_seconds: int = 5
+    smartfind_accept_max_retries: int = 12
+    smartfind_browser_profile: str = "data/smartfind-profile"
+    smartfind_slack_channel_id: str | None = None
+    smartfind_keychain_service: str = "com.zakbot.butler.smartfind"
+    smartfind_keychain_account: str = "856027"
 
     def resolved_host(self) -> str:
         if self.host:

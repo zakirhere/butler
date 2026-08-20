@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import date as date_cls
+from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 
@@ -72,6 +74,31 @@ class FlightOffer:
     duration: str
     date: str
     booking_url: str
+    route: str
+    departure: str
+    arrival: str
+
+
+def _format_duration(value: str) -> str:
+    match = re.fullmatch(r"PT(?:(\d+)H)?(?:(\d+)M)?", value or "")
+    if not match:
+        return value or "?"
+    hours, minutes = match.groups(default="0")
+    parts = []
+    if int(hours):
+        parts.append(f"{int(hours)}h")
+    if int(minutes):
+        parts.append(f"{int(minutes)}m")
+    return " ".join(parts) or "0m"
+
+
+def _format_time(value: str) -> str:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parsed.strftime("%-I:%M %p")
+
+
+def _format_date(value: str) -> str:
+    return datetime.fromisoformat(value).strftime("%b %-d")
 
 
 def _headers() -> dict[str, str]:
@@ -155,15 +182,22 @@ def _search_offers(route: Route, date: str) -> list[FlightOffer]:
         slice0 = item["slices"][0]
         segments = slice0["segments"]
         owner = item.get("owner") or {}
+        first_segment = segments[0]
+        last_segment = segments[-1]
+        route_codes = [first_segment["origin"]["iata_code"]]
+        route_codes.extend(segment["destination"]["iata_code"] for segment in segments)
         offers.append(
             FlightOffer(
                 price=float(item["total_amount"]),
                 currency=item["total_currency"],
                 airline=owner.get("iata_code") or owner.get("name") or "?",
                 stops=len(segments) - 1,
-                duration=slice0.get("duration", ""),
+                duration=_format_duration(slice0.get("duration", "")),
                 date=date,
                 booking_url=_booking_url(route, date),
+                route=" → ".join(route_codes),
+                departure=_format_time(first_segment["departing_at"]),
+                arrival=_format_time(last_segment["arriving_at"]),
             )
         )
     return sorted(offers, key=lambda offer: offer.price)
@@ -182,32 +216,49 @@ def _best_offer_across_dates(route: Route) -> FlightOffer | None:
     return best
 
 
-def _check_route(route: Route, best_prices: dict[str, float]) -> bool:
+def _check_route(route: Route, best_prices: dict[str, float]) -> tuple[FlightOffer | None, bool]:
     best = _best_offer_across_dates(route)
     if best is None:
-        return False
+        return None, False
 
     previous_best = best_prices.get(route.key)
-    threshold_ok = route.max_price is None or best.price <= route.max_price
-    is_new_low = previous_best is None or best.price < previous_best
+    per_person = best.price / settings.flight_adults
+    threshold_ok = route.max_price is None or per_person <= route.max_price
+    is_new_low = previous_best is None or per_person < previous_best
+    return best, threshold_ok and is_new_low
 
-    if not (threshold_ok and is_new_low):
-        return False
 
-    date_line = f"🗓️ *Date:* {best.date}" + (" (flexible window)" if route.date_start else "")
-    message = (
-        f"✈️ *Flight price alert · {route.display}*\n"
-        f"────────────────────\n"
-        f"💰 *Price:* {best.currency} {best.price:,.2f}"
-        f"{' (new low)' if previous_best else ''}\n"
-        f"{date_line}\n"
-        f"🛫 *Airline:* {best.airline} · {best.stops} stop(s) · {best.duration}\n\n"
-        f"<{best.booking_url}|Search this route>"
+def _itinerary_message(
+    offers: list[tuple[Route, FlightOffer]],
+    changed: list[tuple[Route, FlightOffer]],
+) -> str:
+    adults = settings.flight_adults
+    total = sum(offer.price for _, offer in offers)
+    per_person = total / adults
+    lines = [
+        "✈️ *Preferred itinerary · new price low*",
+        "────────────────────────────────────────",
+        "```",
+        "Date   Airline       Route              Depart   Arrive    Duration  Stops  $/person",
+    ]
+    for route, offer in offers:
+        stops = "Nonstop" if offer.stops == 0 else f"{offer.stops} stop"
+        lines.append(
+            f"{_format_date(offer.date):<6} {offer.airline[:13]:<13} "
+            f"{offer.route[:19]:<19} {offer.departure:<8} {offer.arrival:<9} "
+            f"{offer.duration:<9} {stops:<6} ${offer.price / adults:,.0f}"
+        )
+    lines.extend(
+        [
+            "```",
+            f"*Total per person:* {offers[0][1].currency} {per_person:,.0f}",
+            f"*Family of {adults}:* {offers[0][1].currency} {total:,.0f}",
+            "",
+            "*New low on:* " + ", ".join(route.display for route, _ in changed),
+            "",
+        ]
     )
-    if notify(message, channel=settings.flight_slack_channel_id or settings.slack_channel_id):
-        best_prices[route.key] = best.price
-        return True
-    return False
+    return "\n".join(lines)
 
 
 def scan_and_notify() -> dict:
@@ -219,14 +270,28 @@ def scan_and_notify() -> dict:
     routes = _load_routes()
     best_prices = _load_best_prices()
 
-    notified = 0
+    best_offers: list[tuple[Route, FlightOffer]] = []
+    changed: list[tuple[Route, FlightOffer]] = []
     for route in routes:
         try:
-            if _check_route(route, best_prices):
-                notified += 1
+            best, should_alert = _check_route(route, best_prices)
+            if best is not None:
+                best_offers.append((route, best))
+            if best is not None and should_alert:
+                changed.append((route, best))
         except Exception:
             log.exception("flight check failed for %s", route.display)
 
+    notified = 0
+    # A consolidated itinerary is only useful when every configured leg has a
+    # current offer. Duffel can temporarily rate-limit a date search; in that
+    # case wait for the next scheduled run instead of posting a partial trip.
+    if changed and len(best_offers) == len(routes):
+        message = _itinerary_message(best_offers, changed)
+        if notify(message, channel=settings.flight_slack_channel_id or settings.slack_channel_id):
+            for route, best in changed:
+                best_prices[route.key] = best.price / settings.flight_adults
+            notified = len(changed)
     _save_best_prices(best_prices)
     return {"enabled": True, "checked": len(routes), "notified": notified}
 

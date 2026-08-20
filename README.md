@@ -156,3 +156,35 @@ Each feature also has its own `*_enabled` flag in `.env` (e.g.
 launchd job is loaded. Do one manual run via the matching `POST /tasks/...`
 endpoint before trusting the cron. See `NOTES.md` for what each feature
 does and what setup (credentials, one-time logins) it still needs.
+
+### SmartFind Express substitute jobs
+
+`butler.smartfind_worker` keeps a dedicated Playwright browser session open
+and checks the Milpitas SmartFind Available Jobs page every 30 minutes. It
+uses the macOS Keychain item configured by service/account, never a password
+in `.env`. CAPTCHA is not bypassed; if SmartFind asks for one or the session
+expires, the worker pauses and posts a Slack warning.
+
+The worker is deliberately opt-in for acceptance:
+
+```bash
+BUTLER_SMARTFIND_ENABLED=true
+BUTLER_SMARTFIND_AUTO_ACCEPT=true
+```
+
+First run with `BUTLER_SMARTFIND_AUTO_ACCEPT=false` and call
+`POST /tasks/smartfind_scan` once. Close the dedicated SmartFind Chrome
+window before starting the background worker because Chrome profiles cannot
+be opened concurrently. Then install the worker:
+
+```bash
+cp launchd/com.zakbot.butler-smartfind.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.zakbot.butler-smartfind.plist
+```
+
+Only enable auto-accept after verifying that the dry-run Slack message shows
+the expected job fields. The service accepts every detected job when enabled;
+it does not apply school, date, classification, or location filters. If
+SmartFind reports that it is calling other substitutes, the worker retries
+the popup Accept button every 5 seconds, up to 12 retries by default, and
+stops when a success message appears or the retry limit is reached.

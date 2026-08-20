@@ -3,6 +3,26 @@
 Context for whoever picks up this task next (read this before writing code —
 the README covers the butler framework itself, not these features).
 
+## SmartFind Express substitute-job watcher
+
+The dedicated authenticated browser profile is `data/smartfind-profile`.
+The username is `856027`; the password is stored in macOS Keychain under
+service `com.zakbot.butler.smartfind`, account `856027`. Do not put that
+password in `.env` or commit it.
+
+`butler.smartfind_worker` polls the Available Jobs route every 30 minutes.
+The launchd worker must own the profile, so close the visible SmartFind
+Chrome window before loading `launchd/com.zakbot.butler-smartfind.plist`.
+SmartFind CAPTCHA is intentionally not automated. If the session expires,
+the worker posts a Slack warning and waits for a manual login/CAPTCHA.
+
+`BUTLER_SMARTFIND_AUTO_ACCEPT=false` is the safe dry-run default. Set it to
+`true` only after verifying one manual scan; with it enabled, every detected
+available job is accepted without date, school, classification, or location
+filtering. If SmartFind reports that it is calling other substitutes, the
+worker retries the popup Accept button every 5 seconds for up to 12 attempts
+by default, stopping on a success message or retry exhaustion.
+
 ## Facebook Marketplace watcher
 
 ## Goal
