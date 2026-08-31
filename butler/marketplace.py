@@ -29,6 +29,7 @@ class Listing:
     price: int
     location: str
     detail: str
+    photo_urls: list[str]
 
 
 def _prices(text: str) -> list[int]:
@@ -107,8 +108,14 @@ def _scan_location(page, location: str) -> list[Listing]:
             detail_page.goto(item_url, wait_until="domcontentloaded", timeout=30000)
             detail_page.wait_for_timeout(1200)
             detail = " ".join(detail_page.locator("body").inner_text(timeout=10000).split())
+            photo_urls: list[str] = []
+            for image in detail_page.locator("img").all():
+                source = image.get_attribute("src")
+                if source and source.startswith(("http://", "https://")) and source not in photo_urls:
+                    photo_urls.append(source)
+            photo_urls = photo_urls[:8]
             values = _prices(card_text)
-            if not values or REJECT_RE.search(f"{card_text} {detail}"):
+            if not values or not photo_urls or REJECT_RE.search(f"{card_text} {detail}"):
                 log.info("skipping rejected or unclear listing: %s", item_url)
                 continue
             listings.append(
@@ -118,6 +125,7 @@ def _scan_location(page, location: str) -> list[Listing]:
                     price=values[0],
                     location=location,
                     detail=detail[:12000],
+                    photo_urls=photo_urls,
                 )
             )
         except Exception as exc:
@@ -157,7 +165,33 @@ def scan_and_notify() -> dict:
 
     notified = 0
     for listing in new_listings:
-        decision = review_listing(asdict(listing))
+        listing_data = asdict(listing)
+        text_decision = review_listing(listing_data, photo_urls=[])
+        if text_decision.decision == "SKIP":
+            seen.add(listing.url)
+            continue
+
+        # Inspect photos incrementally. Stop as soon as one image supports the
+        # Juniper refresh; there is no reason to send the remaining photos.
+        decision = None
+        for photo_url in listing.photo_urls:
+            candidate = review_listing(listing_data, photo_urls=[photo_url])
+            if candidate.juniper_visual_match in {"confirmed", "likely"}:
+                decision = candidate
+                break
+        if decision is None:
+            log.info(
+                "skipping listing without Juniper photo support: %s",
+                listing.url,
+            )
+            seen.add(listing.url)
+            continue
+        decision = Review(
+            text_decision.decision,
+            decision.reason,
+            decision.verify,
+            decision.juniper_visual_match,
+        )
         if decision.decision == "SKIP":
             seen.add(listing.url)
             continue
@@ -171,6 +205,7 @@ def scan_and_notify() -> dict:
             f"*{listing.title}*\n\n"
             f"💰 *Price:* ${listing.price:,}\n"
             f"📍 *Search area:* {_location_label(listing.location)}\n\n"
+            f"📷 *Juniper photo check:* {decision.juniper_visual_match}\n"
             f"🤖 *Why:* {decision.reason}\n"
             f"🔎 *Verify:* {decision.verify}\n\n"
             f"<https://www.facebook.com/marketplace/item/{listing.url.rstrip('/').split('/')[-1]}|Open listing>"

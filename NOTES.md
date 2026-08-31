@@ -5,16 +5,16 @@ the README covers the butler framework itself, not these features).
 
 ## SmartFind Express substitute-job watcher
 
-The dedicated authenticated browser profile is `data/smartfind-profile`.
-The username is `856027`; the password is stored in macOS Keychain under
-service `com.zakbot.butler.smartfind`, account `856027`. Do not put that
-password in `.env` or commit it.
+SmartFind must be opened and authenticated in the user's existing Chrome
+session. Chrome must be started with remote debugging enabled (the worker
+defaults to `http://127.0.0.1:9222`; override with
+`BUTLER_SMARTFIND_CDP_URL`). The worker attaches to that session and never
+launches headless Chrome or performs an automatic login.
 
 `butler.smartfind_worker` polls the Available Jobs route every 30 minutes.
-The launchd worker must own the profile, so close the visible SmartFind
-Chrome window before loading `launchd/com.zakbot.butler-smartfind.plist`.
-SmartFind CAPTCHA is intentionally not automated. If the session expires,
-the worker posts a Slack warning and waits for a manual login/CAPTCHA.
+SmartFind CAPTCHA is intentionally not automated. If the existing session
+expires, the worker posts a Slack warning and waits for a manual login/CAPTCHA
+in that same visible Chrome session.
 
 `BUTLER_SMARTFIND_AUTO_ACCEPT=false` is the safe dry-run default. Set it to
 `true` only after verifying one manual scan; with it enabled, every detected

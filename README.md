@@ -138,18 +138,28 @@ The plist assumes the venv lives at `.venv` inside this repo — update the
 
 ## Scheduled tasks (Marketplace, flight watching)
 
-Some tasks run on a schedule instead of waiting for a phone request —
-`launchd/com.zakbot.butler-marketplace.plist` and
-`launchd/com.zakbot.butler-flights.plist`. Each just invokes the
-corresponding `butler.*_worker` module directly (not through the HTTP
-server), so they work even if the main server isn't running:
+Marketplace review includes up to eight listing photos. A listing is alerted
+only when the photos visually support the refreshed Model Y (Juniper) design;
+missing or inconclusive photos are skipped. Photo evidence is a screening
+signal, not proof of model year, VIN, title, or vehicle condition.
+
+Some tasks run on a schedule instead of waiting for a phone request. Flight
+watching uses one consolidated job at 6 AM and 6 PM. It checks the four
+configured exact flights sequentially with a provider-safe delay, then posts
+one family fare summary when any monitored fare reaches a new low. The worker
+runs directly (not through the HTTP server), so it works even if the main
+server isn't running:
 
 ```bash
 cp launchd/com.zakbot.butler-marketplace.plist ~/Library/LaunchAgents/
-cp launchd/com.zakbot.butler-flights.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.zakbot.butler-marketplace.plist
-launchctl load ~/Library/LaunchAgents/com.zakbot.butler-flights.plist
+launchctl load launchd/com.zakbot.butler-flights.plist
+launchctl load launchd/com.zakbot.butler-flight-weekly.plist
 ```
+
+The weekly flight job runs Sunday at 7 AM and summarizes the previous seven
+days of checks, including fare results, unavailable flights, provider errors,
+observed lows, and current baselines.
 
 Each feature also has its own `*_enabled` flag in `.env` (e.g.
 `BUTLER_FLIGHT_ENABLED`) — it's a no-op until you flip that on, even if the
@@ -159,11 +169,12 @@ does and what setup (credentials, one-time logins) it still needs.
 
 ### SmartFind Express substitute jobs
 
-`butler.smartfind_worker` keeps a dedicated Playwright browser session open
+`butler.smartfind_worker` attaches to an already-open Chrome session over CDP
 and checks the Milpitas SmartFind Available Jobs page every 30 minutes. It
-uses the macOS Keychain item configured by service/account, never a password
-in `.env`. CAPTCHA is not bypassed; if SmartFind asks for one or the session
-expires, the worker pauses and posts a Slack warning.
+never launches a headless browser or performs an automatic login. Chrome must
+be started with remote debugging enabled (default endpoint
+`http://127.0.0.1:9222`); if the existing session is not logged in, the worker
+pauses and posts a Slack warning.
 
 The worker is deliberately opt-in for acceptance:
 
@@ -173,9 +184,15 @@ BUTLER_SMARTFIND_AUTO_ACCEPT=true
 ```
 
 First run with `BUTLER_SMARTFIND_AUTO_ACCEPT=false` and call
-`POST /tasks/smartfind_scan` once. Close the dedicated SmartFind Chrome
-window before starting the background worker because Chrome profiles cannot
-be opened concurrently. Then install the worker:
+`POST /tasks/smartfind_scan` once. Install the visible Chrome launch agent and
+log into SmartFind in that browser session:
+
+```bash
+cp launchd/com.zakbot.butler-smartfind-chrome.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.zakbot.butler-smartfind-chrome.plist
+```
+
+Then install the worker:
 
 ```bash
 cp launchd/com.zakbot.butler-smartfind.plist ~/Library/LaunchAgents/

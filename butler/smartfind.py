@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import re
-import subprocess
 import time
 from dataclasses import dataclass
 
@@ -15,8 +14,6 @@ from butler.slack import notify
 
 log = logging.getLogger(__name__)
 AVAILABLE_URL = "https://milpitas.eschoolsolutions.com/ui/#/substitute/jobs/available"
-LOGIN_URL = "https://milpitas.eschoolsolutions.com/logOnInitAction.do"
-BROWSER_PATH = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 
 @dataclass
@@ -32,45 +29,8 @@ def _notify(message: str) -> bool:
     return notify(message, channel=settings.smartfind_slack_channel_id or settings.slack_channel_id)
 
 
-def _password() -> str:
-    result = subprocess.run(
-        [
-            "/usr/bin/security",
-            "find-generic-password",
-            "-s",
-            settings.smartfind_keychain_service,
-            "-a",
-            settings.smartfind_keychain_account,
-            "-w",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=True,
-    )
-    return result.stdout.strip()
-
-
 def _logged_in(page: Page) -> bool:
     return page.locator("#userId").count() == 0 and "SmartFind" in page.locator("body").inner_text()
-
-
-def _login_if_needed(page: Page) -> bool:
-    if _logged_in(page):
-        return True
-    page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=30000)
-    page.locator("#userId").fill(settings.smartfind_keychain_account)
-    page.locator("#userPin").fill(_password())
-    # SmartFind may require CAPTCHA after a session expires. Never attempt to bypass it.
-    if page.locator("#captcha, [name*=captcha i], iframe[src*=captcha i]").count():
-        _notify("⚠️ *SmartFind needs manual CAPTCHA/login*\nThe auto-accept worker is paused.")
-        return False
-    page.locator("#submitBtn").click()
-    page.wait_for_timeout(3000)
-    if not _logged_in(page):
-        _notify("⚠️ *SmartFind login failed or needs CAPTCHA*\nThe auto-accept worker is paused.")
-        return False
-    return True
 
 
 def _read_jobs(page: Page) -> list[tuple[object, Job]]:
@@ -107,6 +67,14 @@ def _job_text(job: Job) -> str:
 
 def _body_text(page: Page) -> str:
     return " ".join(page.locator("body").inner_text(timeout=5000).split())
+
+
+def _session_page(context):
+    """Use the existing SmartFind tab when present; otherwise open one visibly."""
+    for candidate in context.pages:
+        if "eschoolsolutions.com" in candidate.url:
+            return candidate
+    return context.new_page()
 
 
 def _success_visible(page: Page) -> bool:
@@ -164,12 +132,8 @@ def _scan_page(page: Page) -> dict:
     # remain stale unless the route is refreshed before each poll.
     page.goto(AVAILABLE_URL, wait_until="domcontentloaded", timeout=30000)
     page.wait_for_timeout(2500)
-    if not _login_if_needed(page):
-        return {"enabled": True, "available": 0, "accepted": 0, "paused": True}
-    page.goto(AVAILABLE_URL, wait_until="domcontentloaded", timeout=30000)
-    page.wait_for_timeout(2500)
     if not _logged_in(page):
-        _notify("⚠️ *SmartFind session expired*\nThe auto-accept worker is paused.")
+        _notify("⚠️ *SmartFind existing browser session is not logged in*\nThe worker is paused until the open Chrome session is logged in.")
         return {"enabled": True, "available": 0, "accepted": 0, "paused": True}
 
     accepted = 0
@@ -207,17 +171,12 @@ def scan_once() -> dict:
     if not settings.slack_bot_token and not settings.slack_webhook_url:
         raise RuntimeError("SmartFind requires Slack configuration")
     with sync_playwright() as playwright:
-        context = playwright.chromium.launch_persistent_context(
-            settings.smartfind_browser_profile,
-            headless=True,
-            executable_path=BROWSER_PATH,
-            locale="en-US",
-        )
-        try:
-            page = context.pages[0] if context.pages else context.new_page()
-            return _scan_page(page)
-        finally:
-            context.close()
+        browser = playwright.chromium.connect_over_cdp(settings.smartfind_cdp_url)
+        if not browser.contexts:
+            raise RuntimeError("connected Chrome has no browser context")
+        context = browser.contexts[0]
+        page = _session_page(context)
+        return _scan_page(page)
 
 
 def run_forever() -> None:
@@ -225,21 +184,21 @@ def run_forever() -> None:
     while True:
         try:
             with sync_playwright() as playwright:
-                context = playwright.chromium.launch_persistent_context(
-                    settings.smartfind_browser_profile,
-                    headless=True,
-                    executable_path=BROWSER_PATH,
-                    locale="en-US",
-                )
-                page = context.pages[0] if context.pages else context.new_page()
+                browser = playwright.chromium.connect_over_cdp(settings.smartfind_cdp_url)
+                if not browser.contexts:
+                    raise RuntimeError("connected Chrome has no browser context")
+                context = browser.contexts[0]
+                page = _session_page(context)
                 try:
                     while True:
                         log.info("SmartFind scan result: %s", _scan_page(page))
                         time.sleep(max(60, settings.smartfind_poll_seconds))
                 finally:
-                    context.close()
+                    # The browser belongs to the user; the Playwright context
+                    # manager disconnects without closing that existing session.
+                    pass
         except Exception:
-            log.exception("SmartFind browser loop failed; will relaunch")
+            log.exception("SmartFind existing-browser connection failed; will retry")
             time.sleep(60)
 
 

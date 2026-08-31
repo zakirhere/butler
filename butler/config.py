@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     flight_routes_path: str = "data/flight-routes.json"
     flight_state_path: str = "data/flight-seen.json"
     flight_adults: int = 1
+    flight_child_ages: str = ""
+    flight_delay_seconds: float = 15.0
+    flight_history_path: str = "data/flight-history.json"
+    flight_summary_state_path: str = "data/flight-summary-seen.json"
+    flight_route_index: int | None = None
     flight_slack_channel_id: str | None = None
     smartfind_enabled: bool = False
     smartfind_auto_accept: bool = False
@@ -66,6 +71,7 @@ class Settings(BaseSettings):
     smartfind_accept_retry_seconds: int = 5
     smartfind_accept_max_retries: int = 12
     smartfind_browser_profile: str = "data/smartfind-profile"
+    smartfind_cdp_url: str = "http://127.0.0.1:9222"
     smartfind_slack_channel_id: str | None = None
     smartfind_keychain_service: str = "com.zakbot.butler.smartfind"
     smartfind_keychain_account: str = "856027"

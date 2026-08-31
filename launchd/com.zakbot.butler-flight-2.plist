@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>Label</key><string>com.zakbot.butler-flight-2</string>
+    <key>Disabled</key><true/>
+    <key>WorkingDirectory</key><string>/Users/zakir/zakbot/butler</string>
+    <key>ProgramArguments</key><array><string>/Users/zakir/zakbot/butler/.venv/bin/python</string><string>-m</string><string>butler.flight_worker</string></array>
+    <key>EnvironmentVariables</key><dict><key>BUTLER_FLIGHT_ROUTE_INDEX</key><string>2</string></dict>
+    <key>StartCalendarInterval</key><array><dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict><dict><key>Hour</key><integer>18</integer><key>Minute</key><integer>30</integer></dict></array>
+    <key>StandardOutPath</key><string>/Users/zakir/zakbot/butler/logs/flight-2.out.log</string><key>StandardErrorPath</key><string>/Users/zakir/zakbot/butler/logs/flight-2.err.log</string>
+</dict></plist>
