@@ -13,7 +13,7 @@ from urllib.parse import quote, urljoin
 from playwright.sync_api import sync_playwright
 
 from butler.config import settings
-from butler.llm import review_listing
+from butler.llm import Review, review_listing
 from butler.slack import notify
 
 log = logging.getLogger(__name__)
