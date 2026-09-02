@@ -1,11 +1,13 @@
 from fastapi import FastAPI
 
 import butler.tasks  # noqa: F401  (import registers all built-in tasks)
+from butler.routes import dashboard
 from butler.routes import health, tasks
 
 app = FastAPI(title="butler")
 app.include_router(health.router)
 app.include_router(tasks.router)
+app.include_router(dashboard.router)
 
 
 def run() -> None:

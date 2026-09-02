@@ -334,34 +334,59 @@ def _itinerary_message(
         if route.key not in offers_by_key and route.key in baselines
     )
     estimated_total = total + fallback_total
+    baseline_total = (
+        sum(baselines[route.key] * passenger_count for route in routes)
+        if all(route.key in baselines for route in routes)
+        else None
+    )
     per_person = total / passenger_count
     lines = [
         "✈️ *Flight price update*",
         "",
         "```",
-        "Trip                 Date       Route              Total       /person",
-        "──────────────────────────────────────────────────────────────────────",
+        "Trip                   | Date       | Route             | Total          | /person      | Baseline   | Difference    ",
+        "───────────────────────+────────────+───────────────────+────────────────+──────────────+────────────+───────────────",
     ]
     for route in routes:
         offer = offers_by_key.get(route.key)
+        baseline = baselines.get(route.key)
         if offer is None:
-            baseline = baselines.get(route.key)
-            fallback = (
-                f"⚠️ ESTIMATE—NOT LIVE USD {baseline * passenger_count:,.2f}"
-                if baseline is not None
-                else "no matching offer"
+            total_text = f"USD {baseline * passenger_count:,.2f}" if baseline is not None else "—"
+            per_person_text = f"USD {baseline:,.2f}" if baseline is not None else "—"
+            baseline_text = f"${baseline:,.2f}" if baseline is not None else "—"
+            lines.append(
+                f"{route.display[:21]:<21} | {(route.date or '?'):<10} | {'⚠️ ESTIMATE':<17} | "
+                f"{total_text:>14} | {per_person_text:>12} | {baseline_text:>10} | {'—':>13}"
             )
-            lines.append(f"{route.display[:20]:<20} {route.date or '?':<10} {fallback}")
             continue
-        lines.append(
-            f"{route.display[:20]:<20} {_format_date(offer.date):<10} "
-            f"{offer.airline} {offer.route.replace(' → ', '-')[:17]:<17} "
-            f"{offer.currency} {offer.price:>9,.2f} {offer.currency} {offer.price / passenger_count:>8,.2f}"
+        current_per_person = offer.price / passenger_count
+        savings = baseline - current_per_person if baseline is not None else None
+        baseline_text = f"${baseline:,.2f}" if baseline is not None else "—"
+        savings_text = (
+            f"${savings:,.2f} less" if savings is not None and savings > 0
+            else f"${abs(savings):,.2f} higher" if savings is not None and savings < 0
+            else "—"
         )
+        lines.append(
+            f"{route.display[:21]:<21} | {_format_date(offer.date):<10} | "
+            f"{(offer.airline + ' ' + offer.route.replace(' → ', '-'))[:17]:<17} | "
+            f"{offer.currency} {offer.price:>9,.2f} | {offer.currency} {current_per_person:>7,.2f} | "
+            f"{baseline_text:>10} | {savings_text:>13}"
+        )
+    total_savings = baseline_total - estimated_total if baseline_total is not None else None
+    savings_line = (
+        f"*Savings vs baseline:* ✅ {offers[0][1].currency} {total_savings:,.2f} less"
+        if total_savings is not None and total_savings > 0
+        else f"*Savings vs baseline:* {offers[0][1].currency} {abs(total_savings):,.2f} higher"
+        if total_savings is not None and total_savings < 0
+        else "*Savings vs baseline:* unavailable"
+    )
     lines.extend(
         [
             "```",
             f"*Estimated family total:* {offers[0][1].currency} {estimated_total:,.2f}",
+            f"*Current baseline total:* {offers[0][1].currency} {baseline_total:,.2f}" if baseline_total is not None else "*Current baseline total:* unavailable",
+            savings_line,
             f"*(Includes ⚠️ estimated, not-live values for unavailable flights; live fare total: {offers[0][1].currency} {total:,.2f})*",
             f"*Average per person ({passenger_count} travelers):* {offers[0][1].currency} {per_person:,.2f}",
             "",

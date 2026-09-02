@@ -12,6 +12,13 @@
         <string>-m</string>
         <string>butler.main</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>BUTLER_HOST</key>
+        <string>127.0.0.1</string>
+        <key>BUTLER_PORT</key>
+        <string>8790</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
