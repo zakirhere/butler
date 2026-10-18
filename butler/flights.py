@@ -191,6 +191,34 @@ def _save_best_prices(best_prices: dict[str, float]) -> None:
     _state_path().write_text(json.dumps(best_prices, indent=2) + "\n")
 
 
+def _paid_baseline_path() -> Path:
+    path = Path(settings.flight_paid_baseline_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _load_paid_baselines() -> dict[str, float]:
+    path = _paid_baseline_path()
+    if not path.exists():
+        log.warning("paid flight baseline file is missing: %s", path)
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        log.warning("could not read paid flight baselines: %s", exc)
+        return {}
+
+
+def _price_signal(current: float, baseline: float | None) -> str:
+    if baseline is None:
+        return "⚪"
+    if current > baseline:
+        return "🟢"
+    if current <= baseline * 0.90:
+        return "🔴"
+    return "⚪"
+
+
 def _history_path() -> Path:
     path = Path(settings.flight_history_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -326,7 +354,7 @@ def _itinerary_message(
 ) -> str:
     passenger_count = len(_passengers())
     offers_by_key = {route.key: offer for route, offer in offers}
-    baselines = _load_best_prices()
+    baselines = _load_paid_baselines()
     total = sum(offer.price for _, offer in offers)
     fallback_total = sum(
         baselines[route.key] * passenger_count
@@ -339,69 +367,96 @@ def _itinerary_message(
         if all(route.key in baselines for route in routes)
         else None
     )
-    per_person = total / passenger_count
-    lines = [
-        "✈️ *Flight price update*",
-        "",
-        "```",
-        "Trip                   | Date       | Route             | Total          | /person      | Baseline   | Difference    ",
-        "───────────────────────+────────────+───────────────────+────────────────+──────────────+────────────+───────────────",
-    ]
+    total_savings = baseline_total - estimated_total if baseline_total is not None else None
+    signal = _price_signal(estimated_total, baseline_total)
+    if total_savings is None:
+        status_line = "*Difference vs paid baseline:* `unavailable`"
+    elif total_savings < 0:
+        percent = abs(total_savings) / baseline_total * 100
+        status_line = f"*Difference vs paid baseline:* `{offers[0][1].currency} {abs(total_savings):,.2f} higher ({percent:.1f}%)`"
+    elif total_savings > 0:
+        percent = total_savings / baseline_total * 100
+        status_line = f"*Difference vs paid baseline:* `{offers[0][1].currency} {total_savings:,.2f} less ({percent:.1f}%)`"
+    else:
+        status_line = "*Difference vs paid baseline:* `at baseline`"
+
+    currency = offers[0][1].currency
+    rows: list[list[str]] = []
     for route in routes:
         offer = offers_by_key.get(route.key)
         baseline = baselines.get(route.key)
+        trip_name = route.display.split(" · ", 1)[0]
         if offer is None:
-            total_text = f"USD {baseline * passenger_count:,.2f}" if baseline is not None else "—"
-            per_person_text = f"USD {baseline:,.2f}" if baseline is not None else "—"
-            baseline_text = f"${baseline:,.2f}" if baseline is not None else "—"
-            lines.append(
-                f"{route.display[:21]:<21} | {(route.date or '?'):<10} | {'⚠️ ESTIMATE':<17} | "
-                f"{total_text:>14} | {per_person_text:>12} | {baseline_text:>10} | {'—':>13}"
-            )
+            current = f"{currency} {baseline:,.2f}*" if baseline is not None else "No fare"
+            paid = f"{currency} {baseline:,.2f}" if baseline is not None else "—"
+            airline = route.display.split(" · ", 1)[1].split()[0] if " · " in route.display else "—"
+            rows.append([
+                f"{trip_name} · {airline}",
+                _format_date(route.date) if route.date else "—",
+                f"{route.origin}-{route.destination}",
+                current,
+                paid,
+                "—",
+            ])
             continue
-        current_per_person = offer.price / passenger_count
-        savings = baseline - current_per_person if baseline is not None else None
-        baseline_text = f"${baseline:,.2f}" if baseline is not None else "—"
+        current = offer.price / passenger_count
+        difference = baseline - current if baseline is not None else None
         savings_text = (
-            f"${savings:,.2f} less" if savings is not None and savings > 0
-            else f"${abs(savings):,.2f} higher" if savings is not None and savings < 0
+            f"${abs(difference):,.2f} higher" if difference is not None and difference < 0
+            else f"${difference:,.2f} less" if difference is not None and difference > 0
+            else "at baseline" if difference is not None
             else "—"
         )
-        lines.append(
-            f"{route.display[:21]:<21} | {_format_date(offer.date):<10} | "
-            f"{(offer.airline + ' ' + offer.route.replace(' → ', '-'))[:17]:<17} | "
-            f"{offer.currency} {offer.price:>9,.2f} | {offer.currency} {current_per_person:>7,.2f} | "
-            f"{baseline_text:>10} | {savings_text:>13}"
-        )
-    total_savings = baseline_total - estimated_total if baseline_total is not None else None
-    savings_line = (
-        f"*Savings vs baseline:* ✅ {offers[0][1].currency} {total_savings:,.2f} less"
-        if total_savings is not None and total_savings > 0
-        else f"*Savings vs baseline:* {offers[0][1].currency} {abs(total_savings):,.2f} higher"
-        if total_savings is not None and total_savings < 0
-        else "*Savings vs baseline:* unavailable"
-    )
-    lines.extend(
-        [
-            "```",
-            f"*Estimated family total:* {offers[0][1].currency} {estimated_total:,.2f}",
-            f"*Current baseline total:* {offers[0][1].currency} {baseline_total:,.2f}" if baseline_total is not None else "*Current baseline total:* unavailable",
-            savings_line,
-            f"*(Includes ⚠️ estimated, not-live values for unavailable flights; live fare total: {offers[0][1].currency} {total:,.2f})*",
-            f"*Average per person ({passenger_count} travelers):* {offers[0][1].currency} {per_person:,.2f}",
-            "",
-            "*New low on:* " + ", ".join(route.display for route, _ in changed),
-        ]
-    )
+        rows.append([
+            f"{trip_name} · {offer.airline}",
+            _format_date(offer.date),
+            offer.route,
+            f"{offer.currency} {current:,.2f}",
+            f"{offer.currency} {baseline:,.2f}" if baseline is not None else "—",
+            savings_text,
+        ])
+
+    headers = ["Trip", "Date", "Route", "Current", "Paid base", "Difference"]
+    widths = [max(len(header), *(len(row[index]) for row in rows)) for index, header in enumerate(headers)]
+    table_lines = [
+        " | ".join(value.ljust(widths[index]) for index, value in enumerate(headers)),
+        "-+-".join("-" * width for width in widths),
+    ]
+    table_lines.extend(" | ".join(value.ljust(widths[index]) for index, value in enumerate(row)) for row in rows)
+    lines = [
+        f"✈️ *Flight price update* {signal}",
+        "",
+        "```",
+        *table_lines,
+        "```",
+        f"*Current estimated total:* *{currency} {estimated_total:,.2f}*",
+        f"*Paid baseline total:* *{currency} {baseline_total:,.2f}*" if baseline_total is not None else "*Paid baseline total:* unavailable",
+        status_line,
+        f"*Current average per person ({passenger_count} travelers):* {currency} {total / passenger_count:,.2f}",
+        "",
+        "*Daily update:* " + ("new low on " + ", ".join(route.display for route, _ in changed) if changed else "no new observed low"),
+    ]
     return "\n".join(lines)
 
 
 def _route_message(route: Route, offer: FlightOffer) -> str:
+    current = offer.price
+    baseline = _load_paid_baselines().get(route.key)
+    baseline_total = baseline * len(_passengers()) if baseline is not None else None
+    icon = _price_signal(current, baseline_total)
+    if baseline is None:
+        comparison = "paid baseline unavailable"
+    elif current > baseline_total:
+        comparison = f"${current - baseline_total:,.2f} above paid baseline"
+    elif current <= baseline_total * 0.90:
+        comparison = f"${baseline_total - current:,.2f} below paid baseline (10%+ lower)"
+    else:
+        comparison = f"${baseline_total - current:,.2f} below paid baseline (within 10%)"
     return (
-        f"✈️ *New flight price low · {route.display}*\n"
+        f"✈️ {icon} *New flight price low · {route.display}*\n"
         f"{_format_date(offer.date)} · {offer.airline} · {offer.route}\n"
         f"{offer.departure}–{offer.arrival} · {offer.duration} · "
-        f"{offer.stops} stop(s) · {offer.currency} {offer.price / len(_passengers()):,.0f}/person\n"
+        f"{offer.stops} stop(s) · {offer.currency} {current:,.2f} total · {comparison}\n"
         f"{offer.booking_url}"
     )
 
@@ -464,15 +519,15 @@ def scan_and_notify() -> dict:
             time.sleep(settings.flight_delay_seconds)
 
     notified = 0
-    # A consolidated itinerary is only useful when every configured leg has a
-    # current offer. Duffel can temporarily rate-limit a date search; in that
-    # case wait for the next scheduled run instead of posting a partial trip.
-    if changed and best_offers:
+    # Send every scheduled run so the paid-baseline comparison shows both
+    # upward and downward price movement. Missing legs use the immutable paid
+    # baseline as an estimate in the message.
+    if best_offers:
         message = _itinerary_message(best_offers, changed, routes)
         if notify(message, channel=settings.flight_slack_channel_id or settings.slack_channel_id):
             for route, best in changed:
                 best_prices[route.key] = best.price / len(_passengers())
-            notified = len(changed)
+            notified = 1
     _save_best_prices(best_prices)
     _save_history(history)
     return {"enabled": True, "checked": len(routes), "notified": notified}
@@ -513,7 +568,7 @@ def send_weekly_summary(*, force: bool = False) -> dict:
     if not history:
         return {"enabled": True, "sent": 0, "reason": "no checks in reporting window"}
     routes = _load_routes()
-    baselines = _load_best_prices()
+    baselines = _load_paid_baselines()
     lines = [
         "✈️ *Weekly flight-watcher summary*",
         f"{window_start.astimezone().strftime('%b %-d')} – {now.astimezone().strftime('%b %-d, %Y')}",
@@ -553,7 +608,7 @@ def send_weekly_summary(*, force: bool = False) -> dict:
             "```",
             f"*Total checks:* {len(history)} · *fare results:* {total_fares}",
             f"*Estimated family total using weekly lows:* USD {weekly_low_total:,.2f}",
-            f"*Current baseline total:* USD {baseline_total:,.2f}",
+            f"*Paid baseline total:* USD {baseline_total:,.2f}",
             "(SFO → Tokyo uses the ⚠️ estimate—not a live fare.)",
             "Each check is one provider request for one configured flight.",
         ]

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>Label</key><string>com.zakbot.butler-whatsapp</string>
+    <key>WorkingDirectory</key><string>/Users/zakir/zakbot/butler/whatsapp-bridge</string>
+    <key>ProgramArguments</key><array><string>/usr/local/bin/node</string><string>server.js</string></array>
+    <key>EnvironmentVariables</key><dict>
+        <key>WHATSAPP_BRIDGE_ENV_FILE</key><string>/Users/zakir/zakbot/butler/.env</string>
+    </dict>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>StandardOutPath</key><string>/Users/zakir/zakbot/butler/logs/whatsapp.out.log</string>
+    <key>StandardErrorPath</key><string>/Users/zakir/zakbot/butler/logs/whatsapp.err.log</string>
+</dict></plist>

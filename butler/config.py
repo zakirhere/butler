@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     flight_enabled: bool = False
     flight_routes_path: str = "data/flight-routes.json"
     flight_state_path: str = "data/flight-seen.json"
+    flight_paid_baseline_path: str = "data/flight-paid-baselines.json"
     flight_adults: int = 1
     flight_child_ages: str = ""
     flight_delay_seconds: float = 15.0
@@ -73,8 +74,14 @@ class Settings(BaseSettings):
     home_target_price: int = 1350000
     home_alert_max_price: int = 1500000
     home_min_lot_sqft: int = 5000
+    home_llm_model: str = "gpt-5.6-luna"
     rentcast_api_key: str | None = None
     serpapi_api_key: str | None = None
+    whatsapp_enabled: bool = Field(default=False, validation_alias="WHATSAPP_ENABLED")
+    whatsapp_recipient: str | None = Field(default=None, validation_alias="WHATSAPP_RECIPIENT")
+    whatsapp_group_id: str | None = Field(default=None, validation_alias="WHATSAPP_GROUP_ID")
+    whatsapp_bridge_port: int = Field(default=8792, validation_alias="WHATSAPP_BRIDGE_PORT")
+    whatsapp_bridge_token: str | None = Field(default=None, validation_alias="WHATSAPP_BRIDGE_TOKEN")
     flight_route_index: int | None = None
     flight_slack_channel_id: str | None = None
     smartfind_enabled: bool = False
@@ -87,6 +94,7 @@ class Settings(BaseSettings):
     smartfind_slack_channel_id: str | None = None
     smartfind_keychain_service: str = "com.zakbot.butler.smartfind"
     smartfind_keychain_account: str = "856027"
+    run_ledger_path: str = "data/runs.sqlite3"
 
     def resolved_host(self) -> str:
         if self.host:

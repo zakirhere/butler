@@ -85,6 +85,68 @@ fallback) — not an import of that package. trading-bot is a separate
 live-money repo with its own strict guardrails and shouldn't be a
 dependency of an unrelated project.
 
+## Unofficial personal WhatsApp notifications
+
+The optional `whatsapp-bridge/` service uses `whatsapp-web.js` and a
+separate personal WhatsApp account. It is independent of the Python daemon,
+binds only to `127.0.0.1`, and persists its browser session under `data/`.
+WhatsApp may restrict or ban accounts used for unofficial automation.
+
+Install Node.js first, then install the bridge dependencies:
+
+```bash
+cd whatsapp-bridge
+npm install
+cd ..
+```
+
+Add the `WHATSAPP_*` values from `.env.example` to the root `.env`. Use an
+international phone number without `+` for `WHATSAPP_RECIPIENT`; groups use
+their WhatsApp ID ending in `@g.us`.
+
+Run the bridge once in the foreground to authenticate:
+
+```bash
+cd whatsapp-bridge
+node server.js
+```
+
+Scan the QR code printed in the terminal. Stop it after `ready` appears. The
+session is then retained in `data/whatsapp-auth`.
+
+After authentication, list available groups and copy the desired `id` into
+`WHATSAPP_GROUP_ID`:
+
+```bash
+curl http://127.0.0.1:8792/groups \
+  -H "Authorization: Bearer <your WHATSAPP_BRIDGE_TOKEN>"
+```
+
+Install it as a persistent macOS service:
+
+```bash
+mkdir -p logs
+cp launchd/com.zakbot.butler-whatsapp.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.zakbot.butler-whatsapp.plist
+```
+
+Test through Butler without running a home search:
+
+```bash
+curl -X POST http://127.0.0.1:8790/tasks/whatsapp_test \
+  -H "Authorization: Bearer <your BUTLER_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"payload":{"text":"Butler WhatsApp test","target":"all"}}'
+```
+
+`target` can be `recipient`, `group`, or `all`. The bridge deduplicates the
+same text per destination and limits deliveries per minute; both controls can
+be configured with `WHATSAPP_DEDUP_TTL_SECONDS` and
+`WHATSAPP_MAX_MESSAGES_PER_MINUTE`.
+
+The bridge uses the installed Google Chrome executable by default, so npm’s
+blocked Puppeteer download script is not required.
+
 ## Adding a new task
 
 Create a file in `butler/tasks/`, register it with the `@task(...)`
@@ -105,6 +167,29 @@ from butler.tasks import ping, example  # noqa: F401
 ```
 
 It's now callable as `POST /tasks/example`.
+
+### Run history and approvals
+
+Butler records HTTP-triggered task runs in SQLite at `data/runs.sqlite3` by
+default. The run ledger stores the payload, status, result or error, and
+timestamps. Inspect it with:
+
+```bash
+curl http://<tailscale-ip>:8787/tasks/runs \
+  -H "Authorization: Bearer <your BUTLER_TOKEN>"
+```
+
+Tasks are automatic by default. A task that can take an external action can
+declare `@task("name", approval="approval_required")`. Its POST response will
+contain a `run_id` and `approval_required` status; approve it explicitly with:
+
+```bash
+curl -X POST http://<tailscale-ip>:8787/tasks/runs/<run_id>/approve \
+  -H "Authorization: Bearer <your BUTLER_TOKEN>"
+```
+
+`smartfind_scan` currently uses this approval policy. Scheduled workers remain
+separate and continue to follow their existing feature flags.
 
 ## Wiring up from your iPhone (Apple Shortcuts)
 

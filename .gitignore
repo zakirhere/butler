@@ -6,3 +6,5 @@ __pycache__/
 *.log
 logs/
 data/
+whatsapp-bridge/.env
+whatsapp-bridge/node_modules/

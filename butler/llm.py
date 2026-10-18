@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 
 import httpx
 
 from butler.config import settings
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -16,6 +19,72 @@ class Review:
     reason: str
     verify: str
     juniper_visual_match: str
+
+
+@dataclass
+class HomeNarrative:
+    why: str
+    concern: str
+
+
+def explain_home_listing(home: dict, score: int) -> HomeNarrative | None:
+    """Return listing-specific why/concern text, or None on failure."""
+    api_key = settings.openai_api_key
+    if not api_key:
+        return None
+    prompt = (
+        "Write one concise sentence explaining why this verified home listing "
+        "was alerted. The alert already shows the bedrooms, bathrooms, square "
+        "footage, lot size, year, exact list price, and target price immediately "
+        "above this line, so do not repeat those facts or numbers. Explain the "
+        "selection fit and tradeoff in qualitative terms, and use specific positive "
+        "details from listing_description when available (for example, a cul-de-sac "
+        "setting, fresh paint, an upgraded kitchen, landscaping, or ADU potential). "
+        "Do not discuss schools, comps, condition, neighborhood quality, or other "
+        "facts not supplied. Do not mention the score or say 'consider offer'. Return "
+        "Also write one concise sentence for 'concern'. The concern must be "
+        "based only on an explicit caveat in listing_description, such as an "
+        "ADU being subject to approval. Do not invent concerns about schools, "
+        "comps, condition, or defects. If the description contains no explicit "
+        "caveat, use an empty string for 'concern'. "
+        "Return JSON only with string fields named 'why' and 'concern'.\n\n"
+        + json.dumps({**home, "score": score}, ensure_ascii=False)
+    )
+    try:
+        response = httpx.post(
+            "https://api.openai.com/v1/responses",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": settings.home_llm_model,
+                "instructions": "You are a careful real-estate listing summarizer.",
+                "input": prompt,
+                "reasoning": {"effort": "none"},
+                "text": {"format": {"type": "json_object"}, "verbosity": "low"},
+                "max_output_tokens": 120,
+                "store": False,
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+        body = response.json()
+        content = body.get("output_text")
+        if not content:
+            for item in body.get("output") or []:
+                if item.get("type") == "message":
+                    for part in item.get("content") or []:
+                        if part.get("type") == "output_text":
+                            content = part.get("text")
+                            break
+        data = json.loads(content or "{}")
+        why = str(data.get("why", "")).strip()
+        concern = str(data.get("concern", "")).strip()
+        return HomeNarrative(why=why, concern=concern) if why else None
+    except (httpx.HTTPError, ValueError, TypeError, KeyError) as exc:
+        log.warning("Home LLM explanation failed: %s", exc)
+        return None
 
 
 def review_listing(listing: dict, photo_urls: list[str] | None = None) -> Review:
