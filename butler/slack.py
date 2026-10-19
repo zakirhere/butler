@@ -50,3 +50,40 @@ def notify(
 
     log.debug("slack notification skipped: not configured")
     return False
+
+
+def post_message(
+    text: str,
+    *,
+    channel: str,
+    thread_ts: str | None = None,
+    unfurl_links: bool = True,
+    unfurl_media: bool = True,
+) -> str | None:
+    """Post with a bot token and return the Slack timestamp for thread tracking."""
+    if not settings.slack_bot_token:
+        log.warning("Slack message timestamp unavailable: bot token is not configured")
+        return None
+    try:
+        payload = {
+            "channel": channel,
+            "text": text,
+            "unfurl_links": unfurl_links,
+            "unfurl_media": unfurl_media,
+        }
+        if thread_ts:
+            payload["thread_ts"] = thread_ts
+        response = httpx.post(
+            "https://slack.com/api/chat.postMessage",
+            headers={"Authorization": f"Bearer {settings.slack_bot_token}"},
+            json=payload,
+            timeout=10.0,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if not data.get("ok"):
+            raise RuntimeError(data.get("error") or "Slack API returned ok=false")
+        return data.get("ts")
+    except Exception:
+        log.exception("slack chat.postMessage failed")
+        return None

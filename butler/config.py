@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     home_target_price: int = 1350000
     home_alert_max_price: int = 1500000
     home_min_lot_sqft: int = 5000
+    home_followup_max_active: int = 20
     home_llm_model: str = "gpt-5.6-luna"
     rentcast_api_key: str | None = None
     serpapi_api_key: str | None = None

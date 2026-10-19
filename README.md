@@ -85,6 +85,23 @@ fallback) — not an import of that package. trading-bot is a separate
 live-money repo with its own strict guardrails and shouldn't be a
 dependency of an unrelated project.
 
+## Home listing follow-ups
+
+The scheduled home watcher keeps the RentCast listing ID and Slack timestamp
+for each alerted home. It checks tracked listings weekly, posts a `⏳`
+reply when RentCast reports a pending or under-contract status, and posts a
+`🎉` reply with the recorded sale price and date when the property record shows
+a sale after the listing date. Price change alerts are replies in the original
+alert thread. Follow-up checks count against the same monthly RentCast request
+limit as home searches. At most 20 listings are followed at once by default;
+newly alerted homes replace the oldest active follow-ups (LIFO). Set
+`BUTLER_HOME_FOLLOWUP_MAX_ACTIVE` to change the cap.
+
+RentCast currently documents listing statuses as `Active` or `Inactive`, so a
+pending reply is sent only when a listing response provides a pending-like
+status. Recorded sale prices can appear after closing when public transaction
+data reaches RentCast; non-disclosure records may not include a price.
+
 ## Unofficial personal WhatsApp notifications
 
 The optional `whatsapp-bridge/` service uses `whatsapp-web.js` and a

@@ -6,7 +6,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, quote, unquote, urlparse
@@ -16,7 +16,7 @@ from playwright.sync_api import sync_playwright
 
 from butler.config import settings
 from butler.llm import explain_home_listing
-from butler.slack import notify
+from butler.slack import post_message as slack_post_message
 from butler.whatsapp import notify as whatsapp_notify
 
 log = logging.getLogger(__name__)
@@ -58,8 +58,10 @@ class _MetaDescriptionParser(HTMLParser):
 @dataclass
 class Home:
     url: str
+    id: str
     address: str
     price: int
+    listed_date: str | None
     beds: int | None
     baths: float | None
     sqft: int | None
@@ -163,14 +165,157 @@ def _parse_record(record: dict) -> Home:
     url = "https://www.google.com/search?q=" + address.replace(" ", "+")
     return Home(
         url=url,
+        id=str(record.get("id") or ""),
         address=address,
         price=int(record["price"]),
+        listed_date=record.get("listedDate"),
         beds=record.get("bedrooms"),
         baths=record.get("bathrooms"),
         sqft=record.get("squareFootage"),
         lot_sqft=record.get("lotSize"),
         year=record.get("yearBuilt"),
     )
+
+
+def _recent_sales(headers: dict[str, str]) -> list[dict]:
+    """Fetch recent Milpitas property sale records in one RentCast request."""
+    response = httpx.get(
+        "https://api.rentcast.io/v1/properties",
+        params={"city": "Milpitas", "state": "CA", "saleDateRange": 365, "limit": 500},
+        headers=headers,
+        timeout=20,
+    )
+    response.raise_for_status()
+    records = response.json()
+    return records if isinstance(records, list) else []
+
+
+def _listing_status(property_id: str, headers: dict[str, str]) -> dict:
+    response = httpx.get(
+        f"https://api.rentcast.io/v1/listings/sale/{quote(property_id, safe='')}",
+        headers=headers,
+        timeout=20,
+    )
+    response.raise_for_status()
+    record = response.json()
+    return record if isinstance(record, dict) else {}
+
+
+def _check_followups(state: dict[str, dict], usage: dict[str, int | str]) -> int:
+    """Check tracked listings and post pending/sold updates in their Slack threads."""
+    headers = {"X-Api-Key": settings.rentcast_api_key or "", "Accept": "application/json"}
+    pending = [
+        item for item in state.values()
+        if (item.get("followup") and not item["followup"].get("completed")
+            and item["followup"].get("property_id"))
+    ]
+    if not pending:
+        return 0
+    replies = 0
+    inactive: list[tuple[dict, dict]] = []
+    now = datetime.now(UTC)
+    for item in pending:
+        followup = item["followup"]
+        last_checked = followup.get("status_checked_at")
+        if last_checked:
+            try:
+                if now - datetime.fromisoformat(last_checked) < timedelta(days=7):
+                    continue
+            except ValueError:
+                pass
+        if int(usage.get("successful_requests", 0)) >= settings.home_rentcast_max_requests:
+            log.warning("Skipping remaining home sale follow-ups: RentCast monthly request limit reached")
+            break
+        try:
+            listing = _listing_status(followup["property_id"], headers)
+        except (httpx.HTTPError, ValueError, TypeError, KeyError) as exc:
+            log.warning("Home listing status lookup failed for %s: %s", item.get("address"), exc)
+            continue
+        usage["successful_requests"] = int(usage.get("successful_requests", 0)) + 1
+        _save_usage(usage)
+        followup["status_checked_at"] = now.isoformat()
+        status = str(listing.get("status") or "").strip().lower()
+        if status in {"pending", "under contract", "contingent", "pending continue to show", "active under contract"}:
+            if not followup.get("pending_notified"):
+                message = f"⏳ *Pending / under contract:* {item.get('address', 'Home listing')}"
+                if slack_post_message(
+                    message,
+                    channel=followup.get("channel"),
+                    thread_ts=followup.get("thread_ts"),
+                ):
+                    followup["pending_notified"] = True
+                    followup["pending_status"] = listing.get("status")
+                    replies += 1
+            continue
+        if status == "inactive":
+            inactive.append((item, listing))
+
+    if not inactive:
+        return replies
+    if int(usage.get("successful_requests", 0)) >= settings.home_rentcast_max_requests:
+        log.warning("Skipping home sale price lookup: RentCast monthly request limit reached")
+        return replies
+    try:
+        records = _recent_sales(headers)
+    except (httpx.HTTPError, ValueError, TypeError, KeyError) as exc:
+        log.warning("Home sale lookup failed: %s", exc)
+        return replies
+    usage["successful_requests"] = int(usage.get("successful_requests", 0)) + 1
+    _save_usage(usage)
+    sales_by_id = {str(record.get("id")): record for record in records if record.get("id")}
+    for item, listing in inactive:
+        followup = item["followup"]
+        record = sales_by_id.get(str(followup["property_id"]))
+        if record is None:
+            continue
+        history = record.get("history") or {}
+        sales = [
+            (str(entry.get("date") or date)[:10], int(entry["price"]))
+            for date, entry in history.items()
+            if entry.get("event") == "Sale" and entry.get("price")
+        ]
+        if not sales and record.get("lastSaleDate") and record.get("lastSalePrice"):
+            sales = [(str(record["lastSaleDate"])[:10], int(record["lastSalePrice"]))]
+        if not sales:
+            continue
+        sale_date, sale_price = max(sales, key=lambda sale: sale[0])
+        listed_date = str(followup.get("listed_date") or followup.get("alerted_at", ""))[:10]
+        if not listed_date or sale_date <= listed_date:
+            continue
+        thread_ts = followup.get("thread_ts")
+        channel = followup.get("channel")
+        if not thread_ts or not channel:
+            continue
+        message = (
+            f"🎉 *Sold:* {item.get('address', 'Home listing')}\n"
+            f"*Recorded selling price:* ${sale_price:,}\n"
+            f"*Sale date:* {sale_date}"
+        )
+        if slack_post_message(message, channel=channel, thread_ts=thread_ts):
+            followup["completed"] = True
+            followup["sold_status"] = listing.get("status")
+            followup["sale_date"] = sale_date
+            followup["sale_price"] = sale_price
+            replies += 1
+    return replies
+
+
+def _enforce_followup_limit(state: dict[str, dict]) -> int:
+    """Keep the newest active follow-ups, dropping the oldest first (LIFO)."""
+    active = [
+        (key, item["followup"])
+        for key, item in state.items()
+        if item.get("followup") and not item["followup"].get("completed")
+    ]
+    limit = max(0, settings.home_followup_max_active)
+    active.sort(key=lambda entry: entry[1].get("alerted_at", ""), reverse=True)
+    evicted = 0
+    for key, followup in active[limit:]:
+        state[key].pop("followup", None)
+        state[key]["followup_evicted_at"] = datetime.now(UTC).isoformat()
+        evicted += 1
+        log.info("Stopped following older home listing: %s", state[key].get("address", key))
+    return evicted
 
 
 def _redfin_link_from_google(address: str) -> str | None:
@@ -453,7 +598,12 @@ def scan_and_notify() -> dict:
             "rentcast_limit_reached": True,
         }
     state = _load_state()
+    evicted = _enforce_followup_limit(state)
+    if evicted:
+        log.info("Evicted %s older home follow-up(s) to enforce the active limit", evicted)
     homes = _scan()
+    usage = _load_usage()
+    sale_replies = _check_followups(state, usage)
     notified = 0
     for home in homes:
         old = state.get(home.url)
@@ -461,17 +611,37 @@ def scan_and_notify() -> dict:
         meaningful = old is None or home.price != old.get("price")
         if meaningful and home.price <= settings.home_alert_max_price and score >= 80:
             message = _message(home, old)
-            if notify(
+            previous_followup = old.get("followup") if old else None
+            ts = slack_post_message(
                 message,
                 channel=settings.home_slack_channel_id,
+                thread_ts=previous_followup.get("thread_ts") if previous_followup else None,
                 unfurl_links=False,
                 unfurl_media=False,
-            ):
+            )
+            if ts:
                 notified += 1
+                if previous_followup:
+                    previous_followup["thread_ts"] = previous_followup.get("thread_ts") or ts
+                elif home.id:
+                    item = state.setdefault(home.url, {})
+                    item["followup"] = {
+                        "property_id": home.id,
+                        "listed_date": home.listed_date,
+                        "alerted_at": datetime.now(UTC).isoformat(),
+                        "thread_ts": ts,
+                        "channel": settings.home_slack_channel_id,
+                        "completed": False,
+                    }
+                evicted = _enforce_followup_limit(state)
+                if evicted:
+                    log.info("Evicted %s older home follow-up(s) to enforce the active limit", evicted)
             whatsapp_notify(message)
-        state[home.url] = {"price": home.price, "score": score, "address": home.address}
+        previous = state.get(home.url, {})
+        previous.update({"price": home.price, "score": score, "address": home.address})
+        state[home.url] = previous
     _save_state(state)
-    return {"enabled": True, "scanned": len(homes), "notified": notified}
+    return {"enabled": True, "scanned": len(homes), "notified": notified, "sale_thread_replies": sale_replies}
 
 
 def run_once() -> None:
