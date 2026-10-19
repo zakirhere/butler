@@ -247,10 +247,11 @@ signal, not proof of model year, VIN, title, or vehicle condition.
 
 Some tasks run on a schedule instead of waiting for a phone request. Flight
 watching uses one consolidated job at 6 AM and 6 PM. It checks the four
-configured exact flights sequentially with a provider-safe delay, then posts
-one family fare summary when any monitored fare reaches a new low. The worker
-runs directly (not through the HTTP server), so it works even if the main
-server isn't running:
+configured route legs sequentially with a provider-safe delay, searching for
+one adult. Routes can filter by exact flight numbers or require a nonstop
+itinerary. The summary uses the lowest matching fare per leg and reports a
+one-adult itinerary estimate. The worker runs directly (not through the HTTP
+server), so it works even if the main server isn't running:
 
 ```bash
 cp launchd/com.zakbot.butler-marketplace.plist ~/Library/LaunchAgents/

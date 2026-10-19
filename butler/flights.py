@@ -43,6 +43,7 @@ class Route:
     max_price: float | None = None
     label: str | None = None
     flight_numbers: list[list[str]] | None = None
+    nonstop: bool = False
 
     def __post_init__(self) -> None:
         if not self.date and not (self.date_start and self.date_end):
@@ -82,12 +83,9 @@ class FlightOffer:
 
 
 def _passengers() -> list[dict[str, int | str]]:
-    passengers = [{"type": "adult"} for _ in range(settings.flight_adults)]
-    for value in settings.flight_child_ages.split(","):
-        value = value.strip()
-        if value:
-            passengers.append({"age": int(value)})
-    return passengers
+    # Flight monitoring is intentionally priced for one adult so each offer
+    # represents an individual fare, independent of household-size settings.
+    return [{"type": "adult"}]
 
 
 def _normalise_flight_number(value: str) -> str:
@@ -165,6 +163,7 @@ def _load_routes() -> list[Route]:
             max_price=item.get("max_price"),
             label=item.get("label"),
             flight_numbers=item.get("flight_numbers"),
+            nonstop=item.get("nonstop", False),
         )
         for item in data
     ]
@@ -298,6 +297,8 @@ def _search_offers(route: Route, date: str) -> list[FlightOffer]:
     for item in raw_offers:
         slice0 = item["slices"][0]
         segments = slice0["segments"]
+        if route.nonstop and len(segments) != 1:
+            continue
         if not _offer_matches(route, segments):
             continue
         owner = item.get("owner") or {}
@@ -432,7 +433,9 @@ def _itinerary_message(
         f"*Current estimated total:* *{currency} {estimated_total:,.2f}*",
         f"*Paid baseline total:* *{currency} {baseline_total:,.2f}*" if baseline_total is not None else "*Paid baseline total:* unavailable",
         status_line,
-        f"*Current average per person ({passenger_count} travelers):* {currency} {total / passenger_count:,.2f}",
+        f"*Estimated itinerary total (one adult):* {currency} {estimated_total:,.2f}",
+        "*Asterisked fares use the paid baseline where no matching live offer was found.*"
+        if fallback_total else "",
         "",
         "*Daily update:* " + ("new low on " + ", ".join(route.display for route, _ in changed) if changed else "no new observed low"),
     ]
